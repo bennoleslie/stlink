@@ -21,6 +21,13 @@ There is no support for STLINKv1.
 Additionally, I'm only really interested in the gdbserver portion of the
 project so, anything else has more or less been stripped away.
 
+In terms of feature set, there are some significant improvements. Firstly
+the gdbserver is persistent, which means that you can exit from gdb, and
+then later reattach with a new instance of gdb.
+
+Secondly, it is possible to attach and detach from the running system
+from within gdb.
+
 HOWTO
 =====
 
@@ -74,7 +81,7 @@ Start address 0x80001c1, load size 1120
 Transfer rate: 1 KB/sec, 560 bytes/write.
 (gdb)
 ...
-(gdb) continue
+(gdb) run
 
 Have fun!
 

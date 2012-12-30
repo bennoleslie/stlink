@@ -101,6 +101,7 @@ typedef struct _st_state_t
     int listen_port;
 } st_state_t;
 
+static unsigned int attached;
 static struct flash_block *flash_root;
 static struct code_hw_breakpoint code_breaks[CODE_BREAK_NUM];
 static struct code_hw_watchpoint data_watches[DATA_WATCH_NUM];
@@ -732,10 +733,70 @@ on_error:
     return error;
 }
 
+static st_error_t
+attach(stlink_t *sl)
+{
+    st_error_t r;
 
+    if (attached == 1)
+    {
+        return ST_SUCCESS;
+    }
+
+    /* enter debug mode */
+
+    r = stlink_enter_swd_mode(sl);
+    if (r != ST_SUCCESS)
+    {
+        return r;
+    }
+
+    r = stlink_force_debug(sl);
+    if (r != ST_SUCCESS)
+    {
+        return r;
+    }
+
+    r = init_code_breakpoints(sl);
+    if (r != ST_SUCCESS)
+    {
+        return r;
+    }
+
+    r = init_data_watchpoints(sl);
+    if (r != ST_SUCCESS)
+    {
+        return r;
+    }
+
+    attached = 1;
+
+    return ST_SUCCESS;
+}
+
+static st_error_t
+detach(stlink_t *sl)
+{
+    st_error_t r;
+
+    if (attached == 0)
+    {
+        return ST_SUCCESS;
+    }
+
+    r = stlink_exit_debug_mode(sl);
+    if (r != ST_SUCCESS)
+    {
+        return r;
+    }
+
+    attached = 0;
+
+    return ST_SUCCESS;
+}
 
 static char *
-handle_query(stlink_t *sl, char *packet)
+handle_query(stlink_t *sl, char *packet, int packet_len __attribute__((unused)))
 {
     char *reply = NULL;
     unsigned query_name_length;
@@ -743,7 +804,12 @@ handle_query(stlink_t *sl, char *packet)
     char *params = "";
     char *query_name = NULL;
 
-    if (packet[1] == 'P' || packet[1] == 'C' || packet[1] == 'L')
+    if (packet[1] == 'C')
+    {
+        reply = strdup("QCp1.0");
+        goto end;
+    }
+    else if (packet[1] == 'P' || packet[1] == 'L')
     {
         reply = strdup("");
         goto end;
@@ -769,12 +835,24 @@ handle_query(stlink_t *sl, char *packet)
     {
         if (sl->chip_id==STM32_CHIPID_F4)
         {
-            reply = strdup("PacketSize=3fff;qXfer:memory-map:read+;qXfer:features:read+");
+            reply = strdup("PacketSize=3fff;qXfer:memory-map:read+;qXfer:features:read+;multiprocess+");
         }
         else
         {
             reply = strdup("PacketSize=3fff;qXfer:memory-map:read+");
         }
+    }
+    else if(!strcmp(query_name, "Attached"))
+    {
+        reply = strdup("1");
+    }
+    else if(!strcmp(query_name, "TStatus"))
+    {
+        reply = strdup("T0");
+    }
+    else if(!strcmp(query_name, "Symbol"))
+    {
+        reply = strdup("OK");
     }
     else if(!strcmp(query_name, "Xfer"))
     {
@@ -890,6 +968,125 @@ end:
     return reply;
 }
 
+static char *
+handle_v(stlink_t *sl, char *packet, int packet_len)
+{
+    char *params = NULL;
+    char *cmd_name = strtok_r(packet, ":;", &params);
+    char *reply = NULL;
+
+    cmd_name++; /* vCommand -> Command */
+
+    if (!strcmp(cmd_name, "FlashErase"))
+    {
+        char *__s_addr, *s_length;
+        char *tok = params;
+
+        __s_addr   = strsep(&tok, ",");
+        s_length = tok;
+
+        unsigned addr = strtoul(__s_addr, NULL, 16);
+        unsigned length = strtoul(s_length, NULL, 16);
+
+        DLOG("FlashErase: addr:%08x,len:%04x\n", addr, length);
+
+        if(flash_add_block(addr, length, sl) < 0)
+        {
+            reply = strdup("E00");
+        }
+        else
+        {
+            reply = strdup("OK");
+        }
+    }
+    else if(!strcmp(cmd_name, "FlashWrite"))
+    {
+        char *__s_addr, *data;
+        char *tok = params;
+
+        __s_addr = strsep(&tok, ":");
+        data   = tok;
+
+        unsigned addr = strtoul(__s_addr, NULL, 16);
+        unsigned data_length = packet_len - (data - packet);
+
+        /*
+         * Length of decoded data cannot be more than
+         * encoded, as escapes are removed.
+         * Additional byte is reserved for alignment fix.
+         */
+        uint8_t *decoded = calloc(data_length + 1, 1);
+        unsigned dec_index = 0;
+        for (unsigned int i = 0; i < data_length; i++)
+        {
+            if (data[i] == 0x7d)
+            {
+                i++;
+                decoded[dec_index++] = data[i] ^ 0x20;
+            }
+            else
+            {
+                decoded[dec_index++] = data[i];
+            }
+        }
+
+        /* Fix alignment */
+        if (dec_index % 2 != 0)
+        {
+            dec_index++;
+        }
+
+        DLOG("binary packet %d -> %d\n", data_length, dec_index);
+
+        if (flash_populate(addr, decoded, dec_index) < 0)
+        {
+            reply = strdup("E00");
+        }
+        else
+        {
+            reply = strdup("OK");
+        }
+    }
+    else if(!strcmp(cmd_name, "FlashDone"))
+    {
+        int _r = flash_go(sl);
+        if (_r < 0)
+        {
+            WLOG("Error writing flash..: %d\n", _r);
+            reply = strdup("E00");
+        }
+        else
+        {
+            DLOG("Success writing flash..\n");
+            reply = strdup("OK");
+        }
+    }
+    else if(!strcmp(cmd_name, "Kill"))
+    {
+        attached = 0;
+        reply = strdup("OK");
+    }
+    else if(!strcmp(cmd_name, "Attach"))
+    {
+        printf("attaching: pid: <%s>\n", params);
+        if (!strcmp(params, "1"))
+        {
+            reply = attach(sl) == ST_SUCCESS ? strdup("S05") : strdup("E00");
+        }
+        else
+        {
+            reply = strdup("E00");
+        }
+    }
+
+    if (reply == NULL)
+    {
+        reply = strdup("");
+    }
+
+    return reply;
+}
+
 /*
  * Handle a single connection
  */
@@ -900,21 +1097,24 @@ handle_connection(stlink_t *sl, int client)
      * To allow resetting the chip from GDB it is required to
      * emulate attaching and detaching to target.
      */
-    unsigned int attached = 1;
     st_error_t r = ST_SUCCESS;
+
+    printf("New connection.. currently attached = %d\n", attached);
+
+    attach(sl);
 
     for(;;)
     {
         char *packet;
         char *reply = NULL;
         reg regp;
-        int status;
+        int packet_len;
 
-        status = gdb_recv_packet(client, &packet);
-        if (status < 0)
+        packet_len = gdb_recv_packet(client, &packet);
+        if (packet_len < 0)
         {
             close(client);
-            WLOG("cannot recv: %d\n", status);
+            WLOG("cannot recv: %d\n", packet_len);
             return;
         }
 
@@ -922,110 +1122,35 @@ handle_connection(stlink_t *sl, int client)
 
         switch (packet[0])
         {
-        case 'q':
-            reply = handle_query(sl, packet);
+        case '!':
+            reply = strdup("OK");
             break;
+
+        case '?':
+            reply = attached ? strdup("S05") : strdup("OK");
+            break;
+
+        case 'D':
+            reply = detach(sl) == ST_SUCCESS ? strdup("OK") : strdup("E00");
+            break;
+
+        case 'q':
+            reply = handle_query(sl, packet, packet_len);
+            break;
+
         case 'v':
+            reply = handle_v(sl, packet, packet_len);
+            break;
+
+        case 'R':
         {
-            char *params = NULL;
-            char *cmdName = strtok_r(packet, ":;", &params);
+            /* Reset the core. */
+            attach(sl);
 
-            cmdName++; /* vCommand -> Command */
-
-            if (!strcmp(cmdName, "FlashErase"))
-            {
-                char *__s_addr, *s_length;
-                char *tok = params;
-
-                __s_addr   = strsep(&tok, ",");
-                s_length = tok;
-
-                unsigned addr = strtoul(__s_addr, NULL, 16);
-                unsigned length = strtoul(s_length, NULL, 16);
-
-                DLOG("FlashErase: addr:%08x,len:%04x\n", addr, length);
-#
-                if(flash_add_block(addr, length, sl) < 0)
-                {
-                    reply = strdup("E00");
-                }
-                else
-                {
-                    reply = strdup("OK");
-                }
-            }
-            else if(!strcmp(cmdName, "FlashWrite"))
-            {
-                char *__s_addr, *data;
-                char *tok = params;
-
-                __s_addr = strsep(&tok, ":");
-                data   = tok;
-
-                unsigned addr = strtoul(__s_addr, NULL, 16);
-                unsigned data_length = status - (data - packet);
-
-                /*
-                 * Length of decoded data cannot be more than
-                 * encoded, as escapes are removed.
-                 * Additional byte is reserved for alignment fix.
-                 */
-                uint8_t *decoded = calloc(data_length + 1, 1);
-                unsigned dec_index = 0;
-                for (unsigned int i = 0; i < data_length; i++)
-                {
-                    if (data[i] == 0x7d)
-                    {
-                        i++;
-                        decoded[dec_index++] = data[i] ^ 0x20;
-                    }
-                    else
-                    {
-                        decoded[dec_index++] = data[i];
-                    }
-                }
-
-                /* Fix alignment */
-                if (dec_index % 2 != 0)
-                {
-                    dec_index++;
-                }
-
-                DLOG("binary packet %d -> %d\n", data_length, dec_index);
-#
-                if (flash_populate(addr, decoded, dec_index) < 0)
-                {
-                    reply = strdup("E00");
-                }
-                else
-                {
-                    reply = strdup("OK");
-                }
-            }
-            else if(!strcmp(cmdName, "FlashDone"))
-            {
-                int _r = flash_go(sl);
-                if (_r < 0)
-                {
-                    WLOG("Error writing flash..: %d\n", _r);
-                    reply = strdup("E00");
-                }
-                else
-                {
-                    DLOG("Success writing flash..\n");
-                    reply = strdup("OK");
-                }
-            }
-            else if(!strcmp(cmdName, "Kill"))
-            {
-                attached = 0;
-                reply = strdup("OK");
-            }
-
-            if (reply == NULL)
-            {
-                reply = strdup("");
-            }
+            stlink_reset(sl);
+            init_code_breakpoints(sl);
+            init_data_watchpoints(sl);
+            reply = strdup("OK");
             break;
         }
 
@@ -1090,25 +1215,10 @@ handle_connection(stlink_t *sl, int client)
 
         case 's':
         {
-            stlink_step(sl);
-
-            reply = strdup("S05"); /* TRAP */
+            reply = stlink_step(sl) == ST_SUCCESS ? strdup("S05") : strdup("E00");
             break;
         }
 
-        case '?':
-        {
-            if (attached)
-            {
-                reply = strdup("S05"); /* TRAP */
-            }
-            else
-            {
-                /* Stub shall reply OK if not attached. */
-                reply = strdup("OK");
-            }
-            break;
-        }
 
         case 'g':
         {
@@ -1125,7 +1235,30 @@ handle_connection(stlink_t *sl, int client)
                     sprintf(&reply[i * 8], "%08x", htonl(regp.r[i]));
                 }
             }
-                break;
+            break;
+        }
+
+        case 'G':
+        {
+            for (int i = 0; i < 16; i++)
+            {
+                char str[9] = {0};
+                strncpy(str, &packet[1 + i * 8], 8);
+                uint32_t reg = strtoul(str, NULL, 16);
+                r = stlink_write_reg(sl, ntohl(reg), i);
+
+                if (r != ST_SUCCESS)
+                {
+                    reply = strdup("E00");
+                    break;
+                }
+
+            }
+            if (reply == NULL)
+            {
+                reply = strdup("OK");
+            }
+            break;
         }
 
         case 'p':
@@ -1265,33 +1398,13 @@ handle_connection(stlink_t *sl, int client)
             break;
         }
 
-        case 'G':
-        {
-            for (int i = 0; i < 16; i++)
-            {
-                char str[9] = {0};
-                strncpy(str, &packet[1 + i * 8], 8);
-                uint32_t reg = strtoul(str, NULL, 16);
-                r = stlink_write_reg(sl, ntohl(reg), i);
-            }
-            if (r != ST_SUCCESS)
-            {
-                reply = strdup("E00");
-            }
-            else
-            {
-                reply = strdup("OK");
-            }
-            break;
-        }
-
         case 'm':
         {
-            char* s_start = &packet[1];
-            char* s_count = strstr(&packet[1], ",") + 1;
+            char *s_start = &packet[1];
+            char *s_count = strstr(&packet[1], ",") + 1;
 
             stm32_addr_t start = strtoul(s_start, NULL, 16);
-            unsigned     count = strtoul(s_count, NULL, 16);
+            unsigned count = strtoul(s_count, NULL, 16);
 
             unsigned adj_start = start % 4;
 
@@ -1447,32 +1560,9 @@ handle_connection(stlink_t *sl, int client)
             break;
         }
 
-        case '!':
-        {
-            /*
-             * Enter extended mode which allows restarting.
-             * We do support that always.
-             */
-            reply = strdup("OK");
-            break;
-        }
-
-        case 'R':
-        {
-            /* Reset the core. */
-            stlink_reset(sl);
-            init_code_breakpoints(sl);
-            init_data_watchpoints(sl);
-
-            attached = 1;
-            reply = strdup("OK");
-            break;
-        }
-
         default:
-        {
             reply = strdup("");
-        }
+            break;
         }
 
         if (reply)
