@@ -1027,7 +1027,8 @@ stlink_open_usb(const int verbose)
         goto on_libusb_error;
     }
     DLOG("Current mode is: %d\n", mode);
-    if (mode != STLINK_DEV_DEBUG_MODE) {
+    if (mode != STLINK_DEV_DEBUG_MODE)
+    {
       r = stlink_enter_swd_mode(sl);
       if (r != ST_SUCCESS)
       {
