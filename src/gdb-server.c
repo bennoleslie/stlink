@@ -732,6 +732,164 @@ on_error:
     return error;
 }
 
+
+
+static char *
+handle_query(stlink_t *sl, char *packet)
+{
+    char *reply = NULL;
+    unsigned query_name_length;
+    char *separator;
+    char *params = "";
+    char *query_name = NULL;
+
+    if (packet[1] == 'P' || packet[1] == 'C' || packet[1] == 'L')
+    {
+        reply = strdup("");
+        goto end;
+    }
+
+    separator = strstr(packet, ":");
+    if (separator == NULL)
+    {
+        separator = packet + strlen(packet);
+    }
+    else
+    {
+        params = separator + 1;
+    }
+
+    query_name_length = (separator - &packet[1]);
+    query_name = calloc(query_name_length + 1, 1);
+    strncpy(query_name, &packet[1], query_name_length);
+
+    DLOG("query: %s params: %s\n", query_name, params);
+
+    if (!strcmp(query_name, "Supported"))
+    {
+        if (sl->chip_id==STM32_CHIPID_F4)
+        {
+            reply = strdup("PacketSize=3fff;qXfer:memory-map:read+;qXfer:features:read+");
+        }
+        else
+        {
+            reply = strdup("PacketSize=3fff;qXfer:memory-map:read+");
+        }
+    }
+    else if(!strcmp(query_name, "Xfer"))
+    {
+        char *type, *op, *__s_addr, *s_length;
+        char *tok = params;
+        char *annex;
+        unsigned long addr;
+        unsigned long length;
+        const char *data = NULL;
+
+        type = strsep(&tok, ":");
+        op = strsep(&tok, ":");
+        annex = strsep(&tok, ":");
+        __s_addr = strsep(&tok, ",");
+        s_length = tok;
+
+        addr = strtoul(__s_addr, NULL, 16);
+        length = strtoul(s_length, NULL, 16);
+
+        DLOG("Xfer: type[%s] op[%s] annex[%s] addr[%d] length[%d]\n", type, op, annex, addr, length);
+
+        if(!strcmp(type, "memory-map") && !strcmp(op, "read"))
+        {
+            data = current_memory_map;
+        }
+
+        if(!strcmp(type, "features") && !strcmp(op, "read"))
+        {
+            data = target_description_F4;
+        }
+
+        if (data != NULL)
+        {
+            unsigned data_length = strlen(data);
+            if (addr + length > data_length)
+            {
+                length = data_length - addr;
+            }
+
+            if (length == 0)
+            {
+                reply = strdup("l");
+            }
+            else
+            {
+                reply = calloc(length + 2, 1);
+                reply[0] = 'm';
+                strncpy(&reply[1], data, length);
+            }
+        }
+        else
+        {
+            reply = strdup("");
+        }
+    }
+    else if(!strncmp(query_name, "Rcmd,",4))
+    {
+        /* Rcmd uses the wrong separator */
+        char *separator = strstr(packet, ",");
+        char *params = "";
+
+        if (separator == NULL)
+        {
+            separator = packet + strlen(packet);
+        }
+        else
+        {
+            params = separator + 1;
+        }
+
+        if (!strncmp(params,"726573756d65",12))
+        {
+            DLOG("Rcmd: resume\n");
+            stlink_run(sl);
+            reply = strdup("OK");
+        }
+        else if (!strncmp(params,"68616c74",8))
+        {
+            DLOG("Rcmd: halt\n");
+            stlink_force_debug(sl);
+            reply = strdup("OK");
+        }
+        else if (!strncmp(params,"6a7461675f7265736574",20))
+        {
+            DLOG("Rcmd: jtag_reset\n");
+            stlink_jtag_reset(sl, 1);
+            stlink_jtag_reset(sl, 0);
+            stlink_force_debug(sl);
+            reply = strdup("OK");
+        }
+        else if (!strncmp(params,"7265736574",10))
+        {
+            DLOG("Rcmd: reset\n");
+            stlink_force_debug(sl);
+            stlink_reset(sl);
+            init_code_breakpoints(sl);
+            init_data_watchpoints(sl);
+            reply = strdup("OK");
+        }
+        else
+        {
+            DLOG("Rcmd: %s\n", params);
+        }
+    }
+
+    if (reply == NULL)
+    {
+        reply = strdup("");
+    }
+
+end:
+    free(query_name);
+    return reply;
+}
+
 /*
  * Handle a single connection
  */
@@ -762,153 +920,11 @@ handle_connection(stlink_t *sl, int client)
 
         DLOG("recv: %s\n", packet);
 
-        switch(packet[0]) {
-        case 'q':
+        switch (packet[0])
         {
-            if (packet[1] == 'P' ||
-                packet[1] == 'C' ||
-                packet[1] == 'L')
-            {
-                reply = strdup("");
-                break;
-            }
-
-            char *separator = strstr(packet, ":");
-            char *params = "";
-
-            if(separator == NULL)
-            {
-                separator = packet + strlen(packet);
-            }
-            else
-            {
-                params = separator + 1;
-            }
-
-            unsigned queryNameLength = (separator - &packet[1]);
-            char* queryName = calloc(queryNameLength + 1, 1);
-            strncpy(queryName, &packet[1], queryNameLength);
-
-            DLOG("query: %s params: %s\n", queryName, params);
-#
-            if(!strcmp(queryName, "Supported"))
-            {
-                if (sl->chip_id==STM32_CHIPID_F4)
-                {
-                    reply = strdup("PacketSize=3fff;qXfer:memory-map:read+;qXfer:features:read+");
-                }
-                else
-                {
-                    reply = strdup("PacketSize=3fff;qXfer:memory-map:read+");
-                }
-            }
-            else if(!strcmp(queryName, "Xfer"))
-            {
-                char *type, *op, *__s_addr, *s_length;
-                char *tok = params;
-                char *annex __attribute__((unused));
-
-                type = strsep(&tok, ":");
-                op = strsep(&tok, ":");
-                annex = strsep(&tok, ":");
-                __s_addr = strsep(&tok, ",");
-                s_length = tok;
-
-                unsigned addr = strtoul(__s_addr, NULL, 16);
-                unsigned length = strtoul(s_length, NULL, 16);
-
-                DLOG("Xfer: type:%s; op:%s; annex:%s; addr:%d; length:%d\n",
-                       type, op, annex, addr, length);
-#
-                const char *data = NULL;
-
-                if(!strcmp(type, "memory-map") && !strcmp(op, "read"))
-                {
-                    data = current_memory_map;
-                }
-
-                if(!strcmp(type, "features") && !strcmp(op, "read"))
-                {
-                    data = target_description_F4;
-                }
-
-                if(data) {
-                    unsigned data_length = strlen(data);
-                    if(addr + length > data_length)
-                    {
-                        length = data_length - addr;
-                    }
-
-                    if(length == 0)
-                    {
-                        reply = strdup("l");
-                    } else {
-                        reply = calloc(length + 2, 1);
-                        reply[0] = 'm';
-                        strncpy(&reply[1], data, length);
-                    }
-                }
-
-            }
-            else if(!strncmp(queryName, "Rcmd,",4))
-            {
-                /* Rcmd uses the wrong separator */
-                char *separator = strstr(packet, ","), *params = "";
-                if(separator == NULL) {
-                    separator = packet + strlen(packet);
-                } else {
-                    params = separator + 1;
-                }
-
-
-                if (!strncmp(params,"726573756d65",12))
-                {
-                    DLOG("Rcmd: resume\n");
-                    stlink_run(sl);
-                    reply = strdup("OK");
-
-                }
-                else if (!strncmp(params,"68616c74",8))
-                {
-                    DLOG("Rcmd: halt\n");
-                    reply = strdup("OK");
-                    stlink_force_debug(sl);
-                }
-                else if (!strncmp(params,"6a7461675f7265736574",20))
-                {
-                    DLOG("Rcmd: jtag_reset\n");
-                    reply = strdup("OK");
-
-                    stlink_jtag_reset(sl, 1);
-                    stlink_jtag_reset(sl, 0);
-                    stlink_force_debug(sl);
-                }
-                else if (!strncmp(params,"7265736574",10))
-                {
-                    DLOG("Rcmd: reset\n");
-                    reply = strdup("OK");
-
-                    stlink_force_debug(sl);
-                    stlink_reset(sl);
-                    init_code_breakpoints(sl);
-                    init_data_watchpoints(sl);
-
-                }
-                else
-                {
-                    DLOG("Rcmd: %s\n", params);
-                }
-            }
-
-            if(reply == NULL)
-            {
-                reply = strdup("");
-            }
-
-            free(queryName);
+        case 'q':
+            reply = handle_query(sl, packet);
             break;
-        }
-
         case 'v':
         {
             char *params = NULL;
