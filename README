@@ -1,3 +1,26 @@
+Introduction
+============
+
+This is a fork of https://github.com/texane/stlink . Unless you happen
+to have the exact same set of requirements as I do the trade-offs here
+are probably not going to work for you, so please just use the
+original.
+
+After hitting some hard to debug errors I've gone through and added
+extensive error checking throughout so that there are much fewer silent
+errors than previously. It is important to note that most of the causes
+of these silent errors are due to the code being debugged, rather than
+any fundamental problems in stlink; so please, just use the original!
+
+The rest of the changes I have made are mostly for my own taste and
+environment, so again, please use the original.
+
+Currently this is only tested on OS X, with the STM32F4 discovery board.
+There is no support for STLINKv1.
+
+Additionally, I'm only really interested in the gdbserver portion of the
+project so, anything else has more or less been stripped away.
+
 HOWTO
 =====
 
@@ -7,41 +30,17 @@ called stlink and there are 2 versions:
 . STLINKv1, present on STM32VL discovery kits,
 . STLINKv2, present on STM32L discovery and later kits.
 
-2 different transport layers are used:
-. STLINKv1 uses SCSI passthru commands over USB,
-. STLINKv2 uses raw USB commands.
+Only the STLINKv2 protocol is supported.
 
 Common requirements
 ~~~~~~~~~~~~~~~~~~~
 
 . libusb-1.0  (You probably already have this, but you'll need the
 development version to compile)
-. pkg-config
-
-IF YOU HAVE AN STLINKv1
-~~~~~~~~~~~~~~~~~~~~~~~
-The STLINKv1's SCSI emulation is very broken, so the best thing to do
-is tell your operating system to completely ignore it.
-
-Options (do one of these before you plug it in)
-   *) modprobe -r usb-storage && modprobe usb-storage quirks=483:3744:i
-or *)1. add "options usb-storage quirks=483:3744:i" to /etc/modprobe.conf
-   *)2. modprobe -r usb-storage && modprobe usb-storage
-or *)1. cp stlink_v1.modprobe.conf /etc/modprobe.d
-   *)2. modprobe -r usb-storage && modprobe usb-storage
-
-IF YOU HAVE AN STLINKv2
-~~~~~~~~~~~~~~~~~~~~~~~
-
-You're ready to go :)
 
 COMPILING
 ~~~~~~~~~
-This project was converted to Autotools by a well meaning individual. The
-following steps will build the project for you.
 
-$ ./autogen.sh
-$ ./configure
 $ make
 
 USING THE GDBSERVER
@@ -58,9 +57,6 @@ There are a few options:
   -h, --help        Print this help
   -vXX, --verbose=XX    specify a specific verbosity level (0..99)
   -v, --verbose specify generally verbose logging
-  -s X, --stlink_version=X
-            Choose what version of stlink to use, (defaults to 2)
-  -1, --stlinkv1    Force stlink version 1
   -p 4242, --listen_port=1234
             Set the gdb server listen port. (default port: 4242)
 
@@ -93,22 +89,10 @@ Remote debugging using localhost:4242
 (gdb) kill
 Kill the program being debugged? (y or n) y
 (gdb) run
-Starting program: /home/whitequark/ST/apps/bally/firmware.elf 
+Starting program: /home/whitequark/ST/apps/bally/firmware.elf
 
 Remember that you can shorten the commands. `tar ext :4242' is good enough
 for GDB.
-
-Setting up udev rules
-=====================
-
-For convenience, you may install udev rules file, 49-stlinkv*.rules, located
-in the root of repository. You will need to copy it to /etc/udev/rules.d,
-and then either reboot or execute
-$ udevadm control --reload-rules
-
-Udev will now create a /dev/stlinkv2_XX or /dev/stlinkv1_XX file, with the appropriate permissions.
-This is currently all the device is for, (only one stlink of each version is supported at 
-any time presently)
 
 Running programs from SRAM
 ==========================
@@ -127,7 +111,6 @@ The GDB stub ships with a correct memory map, including the flash area.
 If you would link your executable to 0x08000000 and then do
 (gdb) load firmware.elf
 then it would be written to the memory.
-
 
 FAQ
 ===
@@ -150,21 +133,8 @@ Set up a breakpoint manually in that case and do `continue'.
 Currently known working combinations of programmer and target
 =============================================================
 
-STLink v1 (as found on the 32VL Discovery board)
-
-Known Working Targets:
-* STM32F100xx (Medium Density VL)
-* STM32F103 (according to jpa- on ##stm32)
-
-No information:
-* everything else!
-
 STLink v2 (as found on the 32L and F4 Discovery boards)
 Known Working Targets:
-* STM32F100xx (Medium Density VL, as on the 32VL Discovery board)
-* STM32L1xx (STM32L Discovery board)
-* STM32F107RC, STM32L151RB, STM32F205RE and  STM32F405RE  on a custom boards 
-  (https://github.com/UweBonnes/wiki_fuer_alex/layout/usps...)
 * STM32F407xx (STM32F4 Discovery board)
 
 Please report any and all known working combinations so I can update this!
