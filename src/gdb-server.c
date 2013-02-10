@@ -1087,6 +1087,12 @@ handle_v(stlink_t *sl, char *packet, int packet_len)
     return reply;
 }
 
+static char *
+handle_core_halted(stlink_t *sl __attribute__((unused)))
+{
+    DLOG("Core now halted; trap\n");
+    return strdup("S05");
+}
 
 static char *
 handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __attribute__((unused)), int client)
@@ -1131,6 +1137,7 @@ handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __at
             uint16_t status;
 
             r = stlink_status(sl, &status);
+
             if (r != ST_SUCCESS)
             {
                 WLOG("Error getting status\n");
@@ -1139,8 +1146,7 @@ handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __at
 
             if (status == STLINK_CORE_HALTED)
             {
-                DLOG("Core now halted; trap\n");
-                return strdup("S05");
+                return handle_core_halted(sl);
             }
         }
 
