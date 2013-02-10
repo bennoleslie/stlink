@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -516,7 +517,7 @@ stlink_write_mem32(stlink_t *sl, uint32_t addr, uint16_t len)
 st_error_t
 stlink_read_mem32(stlink_t *sl, uint32_t addr, uint16_t len)
 {
-    DLOG("*** stlink_read_mem32 ***\n");
+    DLOG("*** stlink_read_mem32: 0x%08" PRIx32 ":%" PRId16 " ***\n", addr, len);
     if (len % 4 != 0)
     {
         /* !!! never ever: fw gives just wrong values */
