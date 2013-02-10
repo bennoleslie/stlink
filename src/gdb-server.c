@@ -45,6 +45,10 @@
 #define FP_CTRL_NUM_CODE(x) ((((x) >> 4) & 0xf) | ((((x) >> 12) & 7) << 4))
 #define FP_CTRL_NUM_LIT(x) (((x) >> 8) & 0xf)
 
+#define INSTR_IS_BREAKPOINT(instr) ((instr >> 8U) == 0xbeU)
+#define BREAKPOINT_VALUE(instr) (instr & 0xffU)
+#define SEMIHOSTING_BREAKPOINT 0xab
+
 /*
  * DWT_COMP0     0xE0001020
  * DWT_MASK0     0xE0001024
@@ -1088,10 +1092,69 @@ handle_v(stlink_t *sl, char *packet, int packet_len)
 }
 
 static char *
-handle_core_halted(stlink_t *sl __attribute__((unused)))
+handle_semihosting(stlink_t *sl)
 {
-    DLOG("Core now halted; trap\n");
-    return strdup("S05");
+    st_error_t r;
+    reg regp;
+    uint32_t r0;
+
+    /* Determine what kind of semi-hosting operation */
+    r = stlink_read_reg(sl, 0, &regp);
+    if (r != ST_SUCCESS)
+    {
+        WLOG("Error getting status");
+        return strdup("E00");
+    }
+    r0 = regp.r[0];
+
+    switch (r0)
+    {
+    default:
+        WLOG("Unhandled semi-hosting request: %d\n", r0);
+        return strdup("S05");
+    }
+}
+
+static char *
+handle_core_halted(stlink_t *sl)
+{
+    st_error_t r;
+    uint16_t instr;
+    uint32_t pc;
+    reg regp;
+
+    /* Read the PC to determine if core halted due to a
+       breakpoint */
+    r = stlink_read_reg(sl, 15, &regp);
+    if (r != ST_SUCCESS)
+    {
+        WLOG("Error getting status");
+        return strdup("E00");
+    }
+    pc = regp.r[15];
+
+    /* Read instruction */
+    r = stlink_read_mem32(sl, pc, 4);
+    if (r != ST_SUCCESS)
+    {
+        WLOG("Error reading memory");
+        return strdup("E00");
+    }
+    stlink_print_data(sl);
+    instr = *(uint16_t*)sl->q_buf;
+    DLOG("Instruction : 0x%04x (top 16-bits)\n", instr);
+
+    if (INSTR_IS_BREAKPOINT(instr) &&
+        BREAKPOINT_VALUE(instr) == SEMIHOSTING_BREAKPOINT)
+    {
+        DLOG("Handle semi-hosting\n");
+        return handle_semihosting(sl);
+    }
+    else
+    {
+        DLOG("Core now halted; trap\n");
+        return strdup("S05");
+    }
 }
 
 static char *
