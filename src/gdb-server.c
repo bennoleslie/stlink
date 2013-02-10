@@ -5,8 +5,8 @@
 
  Modified by Benno Leslie <benno@benno.id.au>
 */
-
 #include <getopt.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1105,6 +1105,7 @@ handle_semihosting(stlink_t *sl)
     st_error_t r;
     reg regp;
     uint32_t r0;
+    uint32_t r1;
 
     /* Determine what kind of semi-hosting operation */
     r = stlink_read_reg(sl, 0, &regp);
@@ -1127,6 +1128,14 @@ handle_semihosting(stlink_t *sl)
         break;
     case ARMSEMI_WRITEC:
         DLOG("Unhandled semi-hosting request: write-character\n");
+        r = stlink_read_reg(sl, 1, &regp);
+        if (r != ST_SUCCESS)
+        {
+            WLOG("Error getting status");
+            return strdup("E00");
+        }
+        r1 = regp.r[1];
+        DLOG("write-character from address: 0x%08" PRIx32 "\n", r1);
         return strdup("S05");
         break;
     case ARMSEMI_WRITE0:
