@@ -114,6 +114,7 @@ typedef struct _st_state_t
 } st_state_t;
 
 static unsigned int attached;
+static bool expecting_fileio;
 static struct flash_block *flash_root;
 static struct code_hw_breakpoint code_breaks[CODE_BREAK_NUM];
 static struct code_hw_watchpoint data_watches[DATA_WATCH_NUM];
@@ -1100,12 +1101,13 @@ handle_v(stlink_t *sl, char *packet, int packet_len)
 }
 
 static char *
-handle_semihosting(stlink_t *sl)
+handle_semihosting(stlink_t *sl, uint32_t pc)
 {
     st_error_t r;
     reg regp;
     uint32_t r0;
     uint32_t r1;
+    char *reply;
 
     /* Determine what kind of semi-hosting operation */
     r = stlink_read_reg(sl, 0, &regp);
@@ -1121,13 +1123,13 @@ handle_semihosting(stlink_t *sl)
     case ARMSEMI_OPEN:
         WLOG("Unhandled semi-hosting request: open\n");
         return strdup("S05");
-        break;
+
     case ARMSEMI_CLOSE:
         WLOG("Unhandled semi-hosting request: close\n");
         return strdup("S05");
-        break;
+
     case ARMSEMI_WRITEC:
-        DLOG("Unhandled semi-hosting request: write-character\n");
+        DLOG("semi-hosting request: write-character\n");
         r = stlink_read_reg(sl, 1, &regp);
         if (r != ST_SUCCESS)
         {
@@ -1136,24 +1138,37 @@ handle_semihosting(stlink_t *sl)
         }
         r1 = regp.r[1];
         DLOG("write-character from address: 0x%08" PRIx32 "\n", r1);
-        return strdup("S05");
-        break;
+
+        /* Incremement PC */
+        r = stlink_write_reg(sl, pc + 2, 15);
+        if (r != ST_SUCCESS)
+        {
+            WLOG("Error setting status");
+            return strdup("E00");
+        }
+
+        expecting_fileio = true;
+
+        reply = malloc(50);
+        sprintf(reply, "Fwrite,2,%x,1", r1);
+        return reply;
+
     case ARMSEMI_WRITE0:
-        DLOG("Unhandled semi-hosting request: write-string\n");
+        WLOG("Unhandled semi-hosting request: write-string\n");
         return strdup("S05");
-        break;
+
     case ARMSEMI_WRITE:
-        DLOG("Unhandled semi-hosting request: write\n");
+        WLOG("Unhandled semi-hosting request: write\n");
         return strdup("S05");
-        break;
+
     case ARMSEMI_READ:
-        DLOG("Unhandled semi-hosting request: read\n");
+        WLOG("Unhandled semi-hosting request: read\n");
         return strdup("S05");
-        break;
+
     case ARMSEMI_READC:
-        DLOG("Unhandled semi-hosting request: read-character\n");
+        WLOG("Unhandled semi-hosting request: read-character\n");
         return strdup("S05");
-        break;
+
     default:
         WLOG("Unhandled semi-hosting request: %d\n", r0);
         return strdup("S05");
@@ -1193,7 +1208,7 @@ handle_core_halted(stlink_t *sl)
         BREAKPOINT_VALUE(instr) == SEMIHOSTING_BREAKPOINT)
     {
         DLOG("Handle semi-hosting\n");
-        return handle_semihosting(sl);
+        return handle_semihosting(sl, pc);
     }
     else
     {
@@ -1206,6 +1221,7 @@ static char *
 handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __attribute__((unused)), int client)
 {
     st_error_t r;
+    expecting_fileio = false;
 
     r = stlink_run(sl);
     if (r != ST_SUCCESS)
@@ -1260,6 +1276,17 @@ handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __at
 
         usleep(250000);
     }
+}
+
+static char *
+handle_fileio(stlink_t *sl, char *packet, int packet_len __attribute__((unused)), int client)
+{
+    if (!expecting_fileio)
+    {
+        WLOG("Recevied an unexpected File I/O reply packet: <%s>\n", packet);
+    }
+
+    return handle_c(sl, packet, packet_len, client);
 }
 
 /*
@@ -1331,6 +1358,10 @@ handle_connection(stlink_t *sl, int client)
 
         case 'c':
             reply = handle_c(sl, packet, packet_len, client);
+            break;
+
+        case 'F':
+            reply = handle_fileio(sl, packet, packet_len, client);
             break;
 
         case 's':
