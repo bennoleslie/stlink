@@ -1118,7 +1118,7 @@ handle_connection(stlink_t *sl, int client)
             return;
         }
 
-        DLOG("recv: %s\n", packet);
+        DLOG("recv: <%s>\n", packet);
 
         switch (packet[0])
         {
