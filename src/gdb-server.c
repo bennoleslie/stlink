@@ -49,6 +49,14 @@
 #define BREAKPOINT_VALUE(instr) (instr & 0xffU)
 #define SEMIHOSTING_BREAKPOINT 0xab
 
+#define ARMSEMI_OPEN 1
+#define ARMSEMI_CLOSE 2
+#define ARMSEMI_WRITEC 3
+#define ARMSEMI_WRITE0 4
+#define ARMSEMI_WRITE 5
+#define ARMSEMI_READ 6
+#define ARMSEMI_READC 7
+
 /*
  * DWT_COMP0     0xE0001020
  * DWT_MASK0     0xE0001024
@@ -1109,6 +1117,34 @@ handle_semihosting(stlink_t *sl)
 
     switch (r0)
     {
+    case ARMSEMI_OPEN:
+        WLOG("Unhandled semi-hosting request: open\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_CLOSE:
+        WLOG("Unhandled semi-hosting request: close\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_WRITEC:
+        DLOG("Unhandled semi-hosting request: write-character\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_WRITE0:
+        DLOG("Unhandled semi-hosting request: write-string\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_WRITE:
+        DLOG("Unhandled semi-hosting request: write\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_READ:
+        DLOG("Unhandled semi-hosting request: read\n");
+        return strdup("S05");
+        break;
+    case ARMSEMI_READC:
+        DLOG("Unhandled semi-hosting request: read-character\n");
+        return strdup("S05");
+        break;
     default:
         WLOG("Unhandled semi-hosting request: %d\n", r0);
         return strdup("S05");
