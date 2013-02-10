@@ -1087,6 +1087,67 @@ handle_v(stlink_t *sl, char *packet, int packet_len)
     return reply;
 }
 
+
+static char *
+handle_c(stlink_t *sl, char *packet __attribute__((unused)), int packet_len __attribute__((unused)), int client)
+{
+    st_error_t r;
+
+    r = stlink_run(sl);
+    if (r != ST_SUCCESS)
+    {
+        return strdup("E00");
+    }
+
+    for (;;)
+    {
+        int int_status = gdb_check_for_interrupt(client);
+
+        if (int_status < 0)
+        {
+            WLOG("cannot check for int: %d\n", int_status);
+            close(client);
+            return strdup("E00");
+        }
+        else if (int_status == 1)
+        {
+            /* User has requested break (using Ctrl-C in GDB) */
+            DLOG("Trying to force debug\n");
+            r = stlink_force_debug_retry(sl, 5);
+            if (r != ST_SUCCESS)
+            {
+                WLOG("Error forcing debug\n");
+                return strdup("E00");
+            }
+            else
+            {
+                return strdup("S05");
+            }
+        }
+        else
+        {
+            /* User hasn't requested a break, but check to see
+               if the target has halted. */
+            uint16_t status;
+
+            r = stlink_status(sl, &status);
+            if (r != ST_SUCCESS)
+            {
+                WLOG("Error getting status\n");
+                return strdup("E00");
+            }
+
+            if (status == STLINK_CORE_HALTED)
+            {
+                DLOG("Core now halted; trap\n");
+                return strdup("S05");
+            }
+        }
+
+        usleep(250000);
+    }
+}
+
 /*
  * Handle a single connection
  */
@@ -1155,63 +1216,8 @@ handle_connection(stlink_t *sl, int client)
         }
 
         case 'c':
-        {
-            r = stlink_run(sl);
-            if (r != ST_SUCCESS)
-            {
-                reply = strdup("E00");
-                break;
-            }
-
-            for (;;)
-            {
-                int int_status = gdb_check_for_interrupt(client);
-
-                if (int_status < 0)
-                {
-                    WLOG("cannot check for int: %d\n", int_status);
-                    close(client);
-                    return;
-                }
-
-                if (int_status == 1)
-                {
-                    DLOG("Trying to force debug\n");
-                    r = stlink_force_debug_retry(sl, 5);
-                    if (r != ST_SUCCESS)
-                    {
-                        WLOG("Error forcing debug\n");
-                        reply = strdup("E00");
-                    }
-                    break;
-                }
-                else
-                {
-                    uint16_t status;
-                    r = stlink_status(sl, &status);
-                    if (r != ST_SUCCESS)
-                    {
-                        WLOG("Error getting status\n");
-                        reply = strdup("E00");
-                        break;
-                    }
-
-                    if (status == STLINK_CORE_HALTED)
-                    {
-                        DLOG("Core now halted... breaking\n");
-                        break;
-                    }
-                }
-
-                usleep(250000);
-            }
-
-            if (reply == NULL)
-            {
-                reply = strdup("S05"); /* TRAP */
-            }
+            reply = handle_c(sl, packet, packet_len, client);
             break;
-        }
 
         case 's':
         {
