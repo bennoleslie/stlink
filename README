@@ -28,6 +28,10 @@ then later reattach with a new instance of gdb.
 Secondly, it is possible to attach and detach from the running system
 from within gdb.
 
+Thirdly, basic support for ARM semi-hosting is available. Currently this
+is limited to single character `putc`, however could be easily extended
+to more comprehensive support.
+
 HOWTO
 =====
 
